@@ -1,0 +1,510 @@
+#!/usr/local/bin/perl -w
+use strict;
+
+## Scott Wiersdorf
+## Created: Tue Jul 31 16:22:26 MDT 2001
+## $Id: qu,v 1.4 2001/08/06 21:10:40 scottw Exp $
+
+use vars qw($VERSION);
+$VERSION = '1.0.4';
+
+## qu
+## quota usage
+
+## -- use some useful modules -- ##
+use Getopt::Long;
+use File::Find;
+use Cwd qw(abs_path getcwd);
+use constant BLK_SIZE => 512;   ## real disk blocksize (I think this is constant)
+
+## -- command-line processing -- ##
+my %opt = (
+	   'blocksize'    => 1024,
+	   'cumulative'   => 0,
+	   'debug'        => '',
+	   'home'         => ( (getpwuid($<))[2]   ## we do special things for root
+			       ? (getpwuid($<))[7] || $ENV{'HOME'}
+			       : '/' ),
+	   'fast'         => 0,
+	   'levels'       => 2,
+	   'sort'         => 'alpha',
+	   'summary'      => 0,
+	   'user'         => (getpwuid($<))[0] || $ENV{'LOGNAME'},
+	  );
+GetOptions( \%opt,
+	    'help|h',
+	    'verbose|v',
+	    'debug:s',
+	    'blocksize=i',
+	    'bytes',
+	    'cumulative',
+	    'home=s',
+	    'fast',
+	    'levels:i',
+	    'sort=s',
+	    'summary',
+	    'user=s',
+	    'version',
+	  ) or usage( 'Invalid option' );
+
+usage() if $opt{'help'};
+if( $opt{'version'} ) {
+    print "This is qu version $VERSION\n";
+    exit;
+}
+
+## -- internal state defaults -- ##
+my $home     = abs_path($opt{'home'});
+my $uid      = (getpwnam($opt{'user'}))[2];
+my $bytes    = 0;
+my $t_bytes  = 0;
+my $blocks   = 0;
+my $t_blocks = 0;
+my %links    = ();
+my %subdir   = ();
+my $path     = undef;
+my $path_dir = undef;
+my $cwd      = getcwd(); $cwd =~ s!^$home!!;
+
+## leaves only $opt{'levels'} levels of directories in the path
+## - if $opt{'levels'} == 1, then we print nothing beyond the path
+## - if $opt{'levels'} == 0, then we do not use the $strip_level and
+##   print all directories below $path
+my $strip_level    = ( $opt{'levels'}
+		       ? $opt{'levels'} -1
+		       : 0 );
+my $strip_level_re = qr!(/[^/]+(/[^/]+){0,$strip_level})!;
+
+## -- do the current working directory unless specified -- ##
+unless( scalar(@ARGV) ) {
+    print "\$cwd      => '$cwd'\n" if $opt{'debug'};
+    push @ARGV, $cwd;
+}
+
+## -- calculate total disk usage -- ##
+for my $arg ( @ARGV ) {
+    $bytes   = $blocks = 0;                 ## reset totals
+    %links   = %subdir  = ();               ## reset internal tracking hashes
+
+    ## For the special case where $arg is the home directory (i.e.,
+    ## '/'), we check for length($arg) == 0, in which case we pass
+    ## $arg along unmolested. If $arg is an absolute path (i.e., has
+    ## a leading slash) we tack that on to $home. If $arg is not an
+    ## absolute path, we tack on $home and $cwd and go from there.
+    $arg     =~ s!/$!!;                     ## strip trailing slash (we'll fix it later)
+    print "\$arg      => '$arg'\n" if $opt{'debug'};
+    $path_dir = $path = $home . ( length($arg) == 0 || $arg =~ m!^/!
+				  ? ''               ## leave it alone, otherwise...
+				  : $cwd . '/' ) .   ## add the current working directory
+				    $arg;
+    $path_dir =~ s!^(.*)/[^/]*$!$1! unless -d $path_dir;
+
+    ## -- some debugging -- ##
+    if( $opt{'debug'} ) {
+	print "\$home     => '$home'\n";
+	print "\$uid      => '$uid'\n";
+	print "\$path     => '$path'\n";
+	print "\$path_dir => '$path_dir'\n";
+	print "\$level    => '" . ($opt{'summary'} ? 'undef' : $opt{'levels'}) . "'\n";
+    }
+
+    ## -- calculate disk usage -- ##
+    printf( "%12s   %12s   %12s   %s\n", "Total Bytes", "Real size", "Bytes", "Path" ) 
+      if $opt{'verbose'};
+    find( \&tract, $path );
+    $path .= '/' if -d $path;               ## add trailing slash
+    $path =~ s!^$home!!;                    ## strip start directory
+
+    ## -- report disk usage -- ##
+    print "\nDisk Usage for $path\n";
+    unless( $opt{'summary'} ) {
+	printf( "%20s   %s\n", "Disk blocks", "Directory Path" );
+	printf( "%20s   %s\n", "===========", "==============" );
+	for my $dir ( sort sort_order keys %subdir ) {
+	    printf "%20u   %s\n", (($subdir{$dir}*BLK_SIZE)/$opt{'blocksize'}), $dir;
+	}
+    }
+    printf( "Bytes:  %12s\n", $bytes ) if $opt{'bytes'};
+    printf( "Blocks: %12u\n", (($blocks*BLK_SIZE)/$opt{'blocksize'}) );
+}
+
+print "\nTotal Blocks: " . (($t_blocks*BLK_SIZE)/$opt{'blocksize'}) . "\n";
+
+exit;
+
+## hehe...
+sub tract {
+    my (undef,$_inode,undef,$_nlink,$_uid,undef,undef,
+	$_size,undef,undef,undef,undef,$_blocks) = lstat($_);
+    $_size = sprintf("%u", -s _);
+
+    ## skip files that aren't ours
+    return 0 unless $_uid == $uid;
+
+    ## skip all but the first hard link found; we believe directories
+    ## always have a link count >1 too.
+    if( $_nlink > 1 ) {
+	return 0 if $links{$_inode};
+	$links{$_inode}++;
+    }
+
+    my $cur_path = $File::Find::dir;        ## use cwd
+    $cur_path =~ s!^$path_dir!!;            ## strip start directory
+
+    ## debug
+    print "\$path_dir => $path_dir\n"
+      if $opt{'debug'} eq 'cumulative';
+    print "\$cur_path => $cur_path\n"
+      if $opt{'debug'} eq 'cumulative';
+
+    ## preserve only $opt{'levels'} directories. If no level is given
+    ## (i.e., 0), we print all directories below $path
+    if( $opt{'levels'} && !$opt{'summary'} ) {
+	$cur_path =~ m/$strip_level_re/o;
+	$cur_path = ( $1 ? $1 : '' );
+    }
+    $cur_path .= '/';                       ## add trailing slash
+
+    ## debug
+    printf( "\n(%-70s  %-16s) %u\n", $File::Find::name, $cur_path, $_blocks )
+      if $opt{'debug'} eq 'cumulative';
+
+    ## cumulative directory totals
+    if( $opt{'cumulative'} && !$opt{'summary'} ) {
+	## update this directory and all directories above it
+	my @dirs = split( /\//, $cur_path );
+
+	## the order of these next two lines is significant
+	@dirs = map { $_ . '/' } @dirs;     ## add some trailing
+					    ## slashes so we're
+	                                    ## matching the same
+					    ## directory path that the
+                                            ## 'update totals' block does
+	pop @dirs;                          ## pop the top (the top
+                                            ## directory gets done after this block)
+
+	print "scalar dirs = '" . scalar(@dirs) . "'; \$cur_path = '$cur_path'; DIRS: '@dirs'\n"
+	  if $opt{'debug'} eq 'cumulative';
+
+	my $t_path    = '';
+	while( defined(my $t_segment = shift @dirs) ) {
+	    $t_path .= $t_segment;
+	    $subdir{$t_path} += $_blocks;
+	    print "Adding $_blocks to $t_path (sum: $subdir{$t_path})\n"
+	      if $opt{'debug'} eq 'cumulative';
+	}
+    }
+
+    ## update totals
+    $bytes   	       += $_size;           ## bytes
+    $t_bytes           += $_size;           ## total bytes
+
+    $blocks 	       += $_blocks;         ## blocks
+    $t_blocks 	       += $_blocks;         ## total blocks
+
+    ## update path statistics
+    unless( $opt{'summary'} ) {
+	unless( defined($subdir{$cur_path}) ) {
+	    $subdir{$cur_path} = 0;
+	}
+	$subdir{$cur_path} += $_blocks;     ## blocks for this directory
+    }
+
+#    print "$bytes   $_size   $File::Find::name\n" if $opt{'verbose'};
+    printf( "%12s   %12u   %12s   %s\n", $bytes, $_blocks*BLK_SIZE, $_size, $File::Find::name )
+      if $opt{'verbose'};
+
+    return 1;
+}
+
+sub sort_order {
+    if( $opt{'sort'} eq 'alpha' ) {
+	$a cmp $b;
+    }
+
+    elsif( $opt{'sort'} eq 'alpha_i' ) {
+	lc($a) cmp lc($b);
+    }
+
+    elsif( $opt{'sort'} eq 'alpha_reverse' ) {
+	$b cmp $a;
+    }
+
+    elsif( $opt{'sort'} eq 'alpha_reverse_i' ) {
+	lc($b) cmp lc($a);
+    }
+
+    elsif( $opt{'sort'} eq 'alpha_breadth' ) {
+	($a =~ tr!/!/!) <=> ($b =~ tr!/!/!) ||
+	  $a cmp $b;
+    }
+
+    elsif( $opt{'sort'} eq 'alpha_breadth_i' ) {
+	($a =~ tr!/!/!) <=> ($b =~ tr!/!/!) ||
+	  lc($a) cmp lc($b);
+    }
+
+    elsif( $opt{'sort'} eq 'blocks' ) {
+	$subdir{$a} <=> $subdir{$b} ||
+	  $a cmp $b;
+    }
+
+    elsif( $opt{'sort'} eq 'blocks_reverse' ) {
+	$subdir{$b} <=> $subdir{$a} ||
+	  $a cmp $b;
+    }
+
+    else {
+	$a cmp $b;
+    }
+}
+
+sub usage {
+    print <<_USAGE_;
+
+usage: qu [--options] [/path1 /path2 ...]
+
+qu calculates disk quota usage based on the specified paths (relative to
+your home directory). If no path is specified, usage calculations will
+be based on the current working directory.
+
+Options:
+    --help              show this menu
+    --verbose           more info than you want ;o)
+    --blocksize=n       use n when calculating block sizes. The
+			default value of n is 1024 bytes so that
+			qu will match the output of the
+			'quota' system command. If you want 'du'-style
+			512 byte block reporting, set blocksize to
+			512.
+    --bytes             show total bytes used in the summary report.
+			Because of the layout of the UNIX filesystem,
+			actual disk usage is rounded up to the nearest
+			block (512 bytes).  So a file that is 999
+			bytes long will actually occupy two blocks of
+			512 bytes each or 1024 actual bytes.
+    --cumulative        show traditional 'du'-style cumulative
+                        directory usage.
+    --levels=n          show n levels of directories. Not specifying
+			any number (or specifying 0) will show all
+			directory levels. If the 'summary' option is
+			specified, no directory output will be
+			displayed regardless of what 'level' is set
+			to.
+    --sort=sortopt      sorts the resulting directory data. If the
+			'summary' option is specified, no directory
+			output will be displayed regardless of what
+			'sort' is set to. Valid sort options are:
+			    - alpha: sort by directory alphanumerically
+			    - alpha_i: like 'alpha' but case-insensitive
+			    - alpha_reverse: like 'alpha' but reversed
+			    - alpha_reverse_i: like 'alpha_reverse' but case-insensitive
+			    - alpha_breadth: sort by "deepness" 
+			    - alpha_breadth_i: like previous but case-insensitive
+			    - blocks: sort by block usage
+			    - blocks_reverse: like previous but reversed
+    --summary           create a summary-only report; that is, do not
+			show any directory information, just a terse
+			disk usage statement for the specified
+			directory (or directories).
+    --user=user         count files owned by 'user'. By default, user
+			is set to the owner of the process running qu
+    --version           display version number
+
+_USAGE_
+    exit;
+}
+
+1;
+__END__
+
+=head1 NAME
+
+B<qu> - display quota usage statistics
+
+=head1 SYNOPSIS
+
+B<qu> [--options] [directory ...]
+
+=head1 DESCRIPTION
+
+B<qu> utility displays the file system block usage for each directory
+in the file hierarchy rooted in each directory argument. If no
+directory is specified, the block usage of the hierarchy rooted in
+the I<current> directory usage is displayed. Usage is only calculated
+for files and directories owned by the process owner (i.e., you),
+making this useful for calculating real quota usage (hence B<qu>).
+
+You may view statistics for multiple, disjointed file hierarchies by
+specifying multiple directory arguments. You may also specify a
+variety of command-line arguments to alter the output of B<qu>. See
+L<"OPTIONS">.
+
+=head1 OPTIONS
+
+A variety of useful options are available for B<qu>, allowing you to
+customize how B<qu> calculates its disk usage and how that information
+is displayed.
+
+Options may be specified with a single dash or the recommended
+GNU-style double-dash for clarity. Options may be abbreviated to the
+fewest unique letters required to avoid ambiguity:
+
+B<qu> -bl 512 -by C<-c> /usr/local
+
+and:
+
+B<qu> --bl=512 --by --c /usr/local
+
+are the same as:
+
+B<qu> --blocksize=512 --bytes --cumulative /usr/local
+
+Pay attention that as new options are added to B<qu>, more characters
+may be required to avoid ambiguity.
+
+=over 4
+
+=item B<help>
+
+Show a brief help menu for B<qu> and exit.
+
+=item B<version>
+
+Display the version number of B<qu> and exit.
+
+=item B<verbose>
+
+Show far more information than you really want ;o). This is useful if
+you suspect that B<qu> has a bug and want to be able to trace it
+somewhat. Seldom useful for the average user.
+
+=item B<blocksize=n>
+
+Use n when calculating block sizes. The default value of n is 1024
+bytes so that B<qu> will match the output of the 'quota' system
+command. If you want 'du'-style 512 byte block reporting, set
+blocksize to 512.
+
+=item B<bytes>
+
+Display total bytes used in the summary report. Because of the layout
+of the UNIX filesystem, actual disk usage is rounded up to the nearest
+block (512 bytes).  So, for example, a file that is 513 bytes long
+will actually occupy two blocks of 512 bytes each or 1024 real bytes.
+
+=item B<cumulative>
+
+Displays the total disk usage for each directory of all blocks rooted
+in that directory. This is the default 'du'-style usage.
+
+=item B<levels=n>
+
+Show I<n> levels of directories. Not specifying any number (or
+specifying 0) will show all directory levels. If the B<summary> option
+is specified, no directory output will be displayed regardless of what
+B<levels> is set to.
+
+=item B<sort=sortoption>
+
+Sorts the resulting directory data. If the B<summary> option is
+specified, no directory output will be displayed regardless of what
+B<sort> is set to. Valid sort options follow.
+
+=cut
+
+## fix this pod section 
+
+=pod
+
+=over 4
+
+=item B<alpha>
+
+Sort by directory alphanumerically
+
+=item B<alpha_i>
+
+Like B<alpha> but case-insensitive
+
+=item B<alpha_reverse>
+
+Like B<alpha> but reversed
+
+=item B<alpha_reverse_i>
+
+Like B<alpha_reverse> but case-insensitive
+
+=item B<alpha_breadth>
+
+Sort by how "far" the directory is from the root, with the "closest"
+directories first in alphanumeric order
+
+=item B<alpha_breadth_i>
+
+Like B<alpha_breadth> but case-insensitive
+
+=item B<blocks>
+
+Sort by block usage
+
+=item B<blocks_reverse>
+
+Like B<blocks> but reversed. This is a useful sort option ;o)
+
+=over
+
+=item B<summary>
+
+Display only summary statistics; that is, do not show any directory
+information, just a terse disk usage statement for the specified
+directory (or directories).
+
+=item B<user=user>
+
+Count files owned by I<user>. By default, user is set to the owner of
+the process running B<qu>.
+
+=back
+
+=head1 EXAMPLES
+
+=head2 Show brief statistics for the file hierarchy rooted in the current working directory
+
+qu --summary
+
+=head2 Show brief statistics for my home directory (should be close to 'quota C<-v>' output)
+
+qu --summary /
+
+=head2 Show detailed statistics for two directory levels deep in my home directory (levels=2 is the default)
+
+qu /
+
+=head2 Show cumulative detailed statistics for three directory levels deep in my home directory
+
+qu --levels=3 --cumulative /
+
+qu C<-l> 3 C<-c> /
+
+=head2 Show detailed statistics for ~/usr/local/lib
+
+qu /usr/local/lib
+
+=head2 Show detailed statistics for ~/usr/local/lib and sort the output based on which directories use the most blocks
+
+qu --sort=blocks_reverse /usr/local/lib
+
+=head2 Show detailed statistics for Bob's /usr/local/bin
+
+qu --user=bob ~bob/usr/local/bin
+
+=head1 AUTHOR
+
+Scott Wiersdorf <swiersdorf@verio.net>
+
+=head1 SEE ALSO
+
+perl(1).
+
+=cut

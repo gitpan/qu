@@ -1,0 +1,15 @@
+Revision history for qu
+
+1.0.4  Mon Aug  6 15:06:59 2001
+	- fix home directory handling for root user
+1.0.3  Mon Aug  6 14:01:45 2001
+	- large file support changes:
+		- no longer 'use integer'
+		- use string formatting (%s) for really big integers
+		- use %u instead of %d for big integers
+		- reset $_size = sprintf("%u", -s _) to avoid perl
+                  integer wrapping
+	- better home directory negotiation using getcwd instead of cwd
+1.0.2  Not released
+1.0.1  Fri Aug  3 10:30:00 2001
+	- initial version

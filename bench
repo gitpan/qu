@@ -1,0 +1,10 @@
+#!/usr/local/bin/perl -w
+use strict;
+
+use Benchmark;
+
+my $count = shift || 50;
+timethese($count, {
+		   'qu' => "system('./qu --summary > /dev/null')",
+		   'vdiskuse' => "system('/usr/local/bin/vdiskuse > /dev/null')",
+		  });

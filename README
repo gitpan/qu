@@ -1,0 +1,36 @@
+## README
+##
+
+NAME
+       qu - display quota usage statistics
+
+SYNOPSIS
+       qu [--options] [directory ...]
+
+DESCRIPTION
+       qu utility displays the file system block usage for each
+       directory in the file hierarchy rooted in each directory
+       argument. If no directory is specified, the block usage of
+       the hierarchy rooted in the current directory usage is
+       displayed. Usage is only calculated for files and
+       directories owned by the process owner (i.e., you), making
+       this useful for calculating real quota usage (hence qu).
+
+       You may view statistics for multiple, disjointed file
+       hierarchies by specifying multiple directory arguments.
+       You may also specify a variety of command-line arguments
+       to alter the output of qu. See the section on OPTIONS.
+
+See qu(1) for more options.
+
+INSTALLATION
+       To install, do this:
+       
+       perl Makefile.PL
+       make
+       make test
+       make install
+
+       To avoid writing to the perllocal.pod file, do 'make
+       pure_install' instead of 'make install'.
+
