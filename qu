@@ -3,10 +3,10 @@ use strict;
 
 ## Scott Wiersdorf
 ## Created: Tue Jul 31 16:22:26 MDT 2001
-## $Id: qu,v 1.5 2001/08/15 22:23:18 scottw Exp $
+## $Id: qu,v 1.9 2001/08/27 22:00:52 scottw Exp $
 
 use vars qw($VERSION);
-$VERSION = '1.05';
+$VERSION = '1.06';
 
 ## qu
 ## quota usage
@@ -54,6 +54,9 @@ if( $opt{'version'} ) {
 ## -- internal state defaults -- ##
 my $home     = abs_path($opt{'home'});
 my $uid      = (getpwnam($opt{'user'}))[2];
+usage("user '" . $opt{'user'} . "' not found!\n")
+  unless defined($uid);
+
 my $bytes    = 0;
 my $t_bytes  = 0;
 my $blocks   = 0;
@@ -133,7 +136,7 @@ for my $path ( @args ) {
 	printf( "%20s   %s\n", "Disk blocks", "Directory Path" );
 	printf( "%20s   %s\n", "===========", "==============" );
 	for my $dir ( sort sort_order keys %subdir ) {
-	    printf "%20u   %s\n", (($subdir{$dir}*BLK_SIZE)/$opt{'blocksize'}), $dir;
+	    printf "%20u   %s\n", int(($subdir{$dir}*BLK_SIZE)/$opt{'blocksize'}), $dir;
 	}
     }
     printf( "Blocks: %12u\n", (($blocks*BLK_SIZE)/$opt{'blocksize'}) );
@@ -278,6 +281,13 @@ sub sort_order {
 }
 
 sub usage {
+    my $msg = shift;
+    if( $msg ) {
+	print chr(7) . "\n";
+	print "ERROR: $msg";
+	sleep 1;
+    }
+
     print <<_USAGE_;
 
 usage: qu [options] [/path1 /path2 ...]
@@ -347,8 +357,9 @@ B<qu> [--options] [directory ...]
 
 =head1 DESCRIPTION
 
-B<qu> utility displays the file system block usage for each directory
-in the file hierarchy rooted in each directory argument. If no
+The B<qu> utility displays the file system block usage for each
+directory in the file hierarchy rooted in each directory argument
+owned by the current process owner (or 'user' if specified). If no
 directory is specified, the block usage of the hierarchy rooted in
 the I<current> directory usage is displayed. Usage is only calculated
 for files and directories owned by the process owner (i.e., you),
@@ -358,6 +369,37 @@ You may view statistics for multiple, disjointed file hierarchies by
 specifying multiple directory arguments. You may also specify a
 variety of command-line arguments to alter the output of B<qu>. See
 L<"OPTIONS">.
+
+If a path is prefixed with a leading slash ('/'), B<qu> will assume
+you want to calculate disk space used relative to your home directory.
+If you want to calculate usage outside of your home directory, chdir
+to that directory and run B<qu>. If you type this, regardless of your
+current working directory:
+
+    qu /usr/local/lib
+
+B<qu> will calculate disk space used in F<$HOME/usr/local/lib>.
+
+Paths not prefixed with a leading slash will be assumed relative to
+the current working directory. If your current working directory path
+is F</usr/local>, typing:
+
+    qu lib
+
+will calculate space used by you in the real F</usr/local/lib> (i.e.,
+not relative to your home directory).
+
+B<qu> may be run by root (UID 0) with the B<--user> option to
+calculate quota usage for a particular user. Unless you are root, the
+B<--user> option will not likely return anything useful unless the
+directories owned by the specified user are readable by your UID.
+
+When run as root, B<qu> uses absolute filesystem paths:
+
+    qu /
+
+will calculate usage from the filesystem F</>, not root's home
+directory (which may or may not be F</>).
 
 =head1 OPTIONS
 
@@ -475,7 +517,7 @@ Sort by block usage
 
 Like B<blocks> but reversed. This is a useful sort option ;o)
 
-=over
+=back
 
 =item B<summary>
 
@@ -524,7 +566,7 @@ qu --user=bob ~bob/usr/local/bin
 
 =head1 AUTHOR
 
-Scott Wiersdorf <swiersdorf@verio.net>
+Scott Wiersdorf <scott@perlcode.org>
 
 =head1 SEE ALSO
 

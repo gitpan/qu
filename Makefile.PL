@@ -4,6 +4,6 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     'NAME'	=> 'qu',
     'VERSION_FROM' => 'qu',
-    'AUTHOR'       => 'Scott Wiersdorf <swiersdorf@verio.net>',
+    'AUTHOR'       => 'Scott Wiersdorf <scott@perlcode.org>',
     'EXE_FILES'     => [ 'qu' ],
 );

@@ -4,6 +4,8 @@ Revision history for qu
 	- code cleanup for path handling
 	- pre-process all path arguments to make canonicalization simpler
 	- added 'twiddle' option
+        - better documentation for running qu as root
+	- added check for bogus user
 1.04  Mon Aug  6 15:06:59 2001
 	- fix home directory handling for root user
 1.03  Mon Aug  6 14:01:45 2001
