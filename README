@@ -5,7 +5,7 @@ NAME
        qu - display quota usage statistics
 
 SYNOPSIS
-       qu [--options] [directory ...]
+       qu [options] [directory ...]
 
 DESCRIPTION
        qu utility displays the file system block usage for each
